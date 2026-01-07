@@ -16,7 +16,7 @@ warnings.filterwarnings('ignore')
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.utils import load_model, load_metadata
+from src.utils import load_model, load_metadata, get_data_path
 
 
 class SHAPExplainer:
@@ -42,7 +42,8 @@ class SHAPExplainer:
         
         # Load feature manifest (priority)
         try:
-            with open("colabupload/feature_manifest.json", "r") as f:
+            manifest_path = get_data_path("feature_manifest.json")
+            with open(manifest_path, "r") as f:
                 data = json.load(f)
                 self.feature_names = data.get("features", [])
         except:
@@ -382,7 +383,8 @@ def main():
     
     # Load test data for background
     try:
-        X_test = pd.read_csv("data/output/X_features.csv")
+        x_path = get_data_path("X_features.csv")
+        X_test = pd.read_csv(x_path)
         print(f"✓ Loaded {len(X_test)} samples for background data")
         
         # Use subset for background

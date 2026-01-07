@@ -19,7 +19,8 @@ import xgboost as xgb
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.utils import (
     load_model, get_risk_category, get_risk_color, 
-    create_prediction_summary, generate_report_filename, parse_fhir_patient
+    create_prediction_summary, generate_report_filename, parse_fhir_patient,
+    get_data_path, get_project_root
 )
 from src.explainability import SHAPExplainer
 from src.evaluate import ModelEvaluator
@@ -681,21 +682,23 @@ def load_model_and_explainer():
         return None, None
 
 
+
+
+
 @st.cache_data
-def load_drug_list():
-    """Load available drugs from FAERS data"""
+def load_drug_options():
+    """Load unique drug names for autocomplete"""
     try:
-        # Fix: Use correct path
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        faers_path = os.path.join(base_dir, "colabupload", "faers_drug_summary.csv")
-        faers = pd.read_csv(faers_path)
-        drugs = sorted(faers['drugname'].dropna().unique().tolist())
-        return drugs
-    except:
-        return ["Aspirin", "Metformin", "Lisinopril", "Atorvastatin", "Levothyroxine"]
+        faers_path = get_data_path("faers_drug_summary.csv")
+        if faers_path.exists():
+            df = pd.read_csv(faers_path)
+            # Sort alphabetically and handle non-strings
+            drugs = sorted([str(d) for d in df['drugname'].unique() if pd.notna(d)])
+            return ["Select a drug..."] + drugs + ["Other"]
+        return ["Other"]
+    except Exception:
+        return ["Other"]
 
-
-@st.cache_data
 def load_encoders_map():
     """Load and invert encoders.json for mapping UI strings to Model integers"""
     try:
@@ -728,7 +731,8 @@ def normalize_drug_name(name):
 def load_performance_metrics():
     """Load model performance metrics"""
     try:
-        metrics = pd.read_csv("reports/evaluation_metrics.csv")
+        metrics_path = get_data_path("evaluation_metrics.csv")
+        metrics = pd.read_csv(metrics_path)
         return metrics.to_dict('records')[0]
     except:
         # Default metrics (realistic values after class balancing)
@@ -926,19 +930,8 @@ def calculate_drug_risk_features(selected_drugs):
     
     # Load FAERS drug data
     try:
-        # Robust path finding
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        data_path = os.path.join(base_dir, "colabupload", "faers_drug_summary.csv")
-        
-        if not os.path.exists(data_path):
-            # Try alternative path (if running from root)
-            if os.path.exists("colabupload/faers_drug_summary.csv"):
-                data_path = "colabupload/faers_drug_summary.csv"
-            else:
-                print(f"Warning: FAERS data not found at {data_path}")
-                raise FileNotFoundError("FAERS data file not found")
-                
-        faers_data = pd.read_csv(data_path)
+        faers_path = get_data_path("faers_drug_summary.csv")
+        faers_data = pd.read_csv(faers_path)
         
         # Get drug risk data for selected drugs
         drug_rates = []
@@ -989,18 +982,8 @@ def analyze_drug_risks(selected_drugs):
         return {'top_drugs': [], 'high_risk_count': 0, 'mean_adr_rate': 0, 'max_severe_rate': 0}
     
     try:
-        # Robust path finding
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        data_path = os.path.join(base_dir, "colabupload", "faers_drug_summary.csv")
-        
-        if not os.path.exists(data_path):
-            # Try alternative path
-            if os.path.exists("colabupload/faers_drug_summary.csv"):
-                data_path = "colabupload/faers_drug_summary.csv"
-            else:
-                raise FileNotFoundError("FAERS data file not found")
-                
-        faers_data = pd.read_csv(data_path)
+        faers_path = get_data_path("faers_drug_summary.csv")
+        faers_data = pd.read_csv(faers_path)
         
         drug_info = []
         for drug in selected_drugs:
@@ -1200,7 +1183,8 @@ def page_prediction_results():
     # Prepare features for model
     try:
         # Load feature template
-        X_template = pd.read_csv("models/feature_template.csv").iloc[0:1].copy()
+        template_path = get_data_path("feature_template.csv")
+        X_template = pd.read_csv(template_path).iloc[0:1].copy()
         
         # Clear existing values to ensure fresh data
         for col in X_template.columns:
@@ -1503,7 +1487,8 @@ def page_prediction_results():
             # Correct way to get importance from Booster
             importance_map = model.get_score(importance_type='gain')
             # Map valid features, default to 0
-            feature_names = pd.read_csv("models/feature_template.csv").columns
+            template_path = get_data_path("feature_template.csv")
+            feature_names = pd.read_csv(template_path).columns
             feature_importance = [importance_map.get(f, 0) for f in feature_names]
             
             importance_df = pd.DataFrame({
@@ -1650,7 +1635,8 @@ def page_explainability():
         st.subheader("Global Feature Importance")
         try:
             # Load feature importance
-            feature_names = pd.read_csv("models/feature_template.csv").columns
+            template_path = get_data_path("feature_template.csv")
+            feature_names = pd.read_csv(template_path).columns
             # Correct way to get importance from Booster
             importance_map = model.get_score(importance_type='gain')
             feature_importance = [importance_map.get(f, 0) for f in feature_names]
@@ -1682,7 +1668,8 @@ def page_explainability():
             try:
                 patient_data = st.session_state['patient_data']
                 # Prepare features (same as in prediction)
-                X_template = pd.read_csv("models/feature_template.csv").iloc[0:1].copy()
+                template_path = get_data_path("feature_template.csv")
+                X_template = pd.read_csv(template_path).iloc[0:1].copy()
                 for col in X_template.columns:
                     X_template[col] = 0
                 
@@ -1842,7 +1829,8 @@ def page_performance():
     
     # Define feature_names centrally before any try/except blocks
     try:
-        feature_names = pd.read_csv("models/feature_template.csv").columns.tolist()
+        template_path = get_data_path("feature_template.csv")
+        feature_names = pd.read_csv(template_path).columns.tolist()
     except:
         feature_names = []
     
@@ -2117,7 +2105,8 @@ def process_uploaded_patient_data(patient_data):
     
     try:
         # Prepare features for model
-        cols = pd.read_csv("models/feature_template.csv").columns
+        template_path = get_data_path("feature_template.csv")
+        cols = pd.read_csv(template_path).columns
         X_template = pd.DataFrame({c: [0] for c in cols})
         
         # Calculate derived clinical flags (replicating preprocess.py logic)
@@ -2347,7 +2336,8 @@ def predict_patient_risk_pure(patient_data):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         model_path = os.path.join(base_dir, "models", "xgb_adr_model.json")
         model = load_model(model_path)
-        cols = pd.read_csv("models/feature_template.csv").columns
+        template_path = get_data_path("feature_template.csv")
+        cols = pd.read_csv(template_path).columns
         X_template = pd.DataFrame({c: [0] for c in cols})
         gender_val = 1 if str(patient_data.get('gender', 'M')).upper().startswith('M') else 0
         selected_drugs = patient_data.get('selected_drugs', [])
@@ -2717,7 +2707,18 @@ def render_patient_form():
             
             with st.form("add_drug_form", clear_on_submit=True):
                 c1, c2 = st.columns(2)
-                d_name = c1.text_input("Generic Name")
+                # Load drug options
+                drug_options = load_drug_options()
+                
+                # Drug Selection with Autocomplete
+                selected_drug = c1.selectbox("Generic Name", options=drug_options, help="Type to search")
+                
+                if selected_drug == "Other":
+                    d_name = c1.text_input("Enter Drug Name Manually")
+                elif selected_drug == "Select a drug...":
+                    d_name = ""
+                else:
+                    d_name = selected_drug
                 d_dose = c2.text_input("Dose (e.g., 500mg)")
                 
                 c3, c4 = st.columns(2)
@@ -3233,7 +3234,8 @@ def render_explainability_tab():
         st.subheader("Global Feature Importance")
         try:
             # Load feature importance
-            feature_names = pd.read_csv("models/feature_template.csv").columns
+            template_path = get_data_path("feature_template.csv")
+            feature_names = pd.read_csv(template_path).columns
             # Correct way to get importance from Booster
             importance_map = model.get_score(importance_type='gain')
             feature_importance = [importance_map.get(f, 0) for f in feature_names]
@@ -3265,15 +3267,11 @@ def render_explainability_tab():
             # Prepare features (same as in prediction)
             # Prepare features (same as in prediction)
             # Robust path finding
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            template_path = os.path.join(base_dir, "models", "feature_template.csv")
-            
-            if os.path.exists(template_path):
+            template_path = get_data_path("feature_template.csv")
+            try:
                 X_template = pd.read_csv(template_path).iloc[0:1].copy()
-            elif os.path.exists("models/feature_template.csv"):
-                X_template = pd.read_csv("models/feature_template.csv").iloc[0:1].copy()
-            else:
-                raise FileNotFoundError("Feature template not found")
+            except FileNotFoundError:
+                raise FileNotFoundError(f"Feature template not found at {template_path}")
 
             if X_template.empty:
                 raise ValueError("Feature template is empty")

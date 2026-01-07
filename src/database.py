@@ -62,7 +62,13 @@ class PatientRecord(Base):
     user = relationship("User", back_populates="records")
 
 # Database setup
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# Database setup
+if DATABASE_URL.startswith("sqlite"):
+    connect_args = {"check_same_thread": False}
+else:
+    connect_args = {}
+
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
