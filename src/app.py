@@ -1178,32 +1178,128 @@ def page_prediction_results():
         for col in X_template.columns:
             X_template[col] = 0
         
-        # Fill with actual patient data - ALL model features
+        gender_val = 1 if str(patient_data.get('gender', 'M')).upper().startswith('M') else 0
+        selected_drugs = patient_data.get('selected_drugs', [])
+        if isinstance(selected_drugs, str):
+            selected_drugs = [d.strip() for d in selected_drugs.split(',')]
+        drug_risk_features = calculate_drug_risk_features(selected_drugs)
+        polypharmacy_flag = 1 if len(selected_drugs) >= 5 else 0
+        major_polypharmacy_flag = 1 if len(selected_drugs) >= 10 else 0
+        lab_alt = patient_data.get('lab_alt', 25)
+        lab_ast = patient_data.get('lab_ast', 30)
+        lab_bilirubin = patient_data.get('lab_bilirubin', 0.8)
+        renal_abnormal_flag = 1 if patient_data.get('lab_creatinine', 0) > 1.5 else 0
+        hepatic_abnormal_flag = 1 if (lab_alt > 40 or lab_ast > 40 or lab_bilirubin > 1.2) else 0
+        anemia_flag = 1 if patient_data.get('lab_hemoglobin', 13.5) < 10 else 0
+        thrombocytopenia_flag = 1 if patient_data.get('lab_platelet_count', 250) < 150 else 0
+        infection_flag = 1 if patient_data.get('lab_white_blood_cells', 7.5) > 12 else 0
+        comorbs = [c.lower() for c in patient_data.get('comorbidities', [])]
+        feat_ckd = 1 if any('kidney' in c or 'ckd' in c or 'renal' in c for c in comorbs) else 0
+        feat_cad_hf = 1 if any('heart' in c or 'failure' in c or 'cad' in c or 'hf' in c for c in comorbs) else 0
+        feat_diabetes = 1 if any('diabet' in c for c in comorbs) else 0
+        feat_htn = 1 if any('hypertens' in c or 'bp' in c for c in comorbs) else 0
+        feat_resp = 1 if any('asthma' in c or 'copd' in c for c in comorbs) else 0
+        feat_liver = 1 if any('liver' in c or 'cirrhosis' in c for c in comorbs) else 0
+        feat_cancer = 1 if any('cancer' in c or 'malignan' in c or 'tumor' in c or 'chemo' in c for c in comorbs) else 0
+        feat_immune = 1 if any('immune' in c or 'transplant' in c or 'hiv' in c for c in comorbs) else 0
+        feat_dialysis = 1 if any('dialysis' in c for c in comorbs) or patient_data.get('on_dialysis') else 0
+        feat_oxygen = 1 if any('oxygen' in c for c in comorbs) or patient_data.get('on_oxygen') else 0
+        feat_vent = 1 if patient_data.get('on_ventilator') else 0
+        feat_vaso = 1 if patient_data.get('on_vasopressors') else 0
+        encoders = load_encoders_map()
+        if encoders:
+            def get_enc(col, val, default=0):
+                if col in encoders:
+                    return encoders[col].get(str(val), encoders[col].get('Other', default))
+                return default
+            race_val = get_enc('race', patient_data.get('race', 'Other'))
+            ins_val = get_enc('insurance', patient_data.get('insurance', 'Medicare'))
+            marital_val = get_enc('marital_status', patient_data.get('marital_status', 'Married'))
+            adm_val = get_enc('admission_type', patient_data.get('admission_type', 'Emergency'))
+            loc_val = get_enc('admission_location', patient_data.get('ward', 'ICU'))
+        else:
+            race_map = {"White": 29, "Black": 4, "Hispanic": 12, "Asian": 2, "Other": 20}
+            ins_map = {"Medicare": 2, "Private": 4, "Medicaid": 1, "Other": 3}
+            marital_map = {"Married": 2, "Single": 4, "Widowed": 6, "Divorced": 1}
+            adm_type_map = {"Emergency": 5, "Inpatient": 1, "OPD": 6, "ICU": 2}
+            ward_map = {"General Ward": 9, "HDU": 3, "ICU": 2, "Private": 4}
+            race_val = race_map.get(patient_data.get('race', 'Other'), 0)
+            ins_val = ins_map.get(patient_data.get('insurance', 'Medicare'), 0)
+            marital_val = marital_map.get(patient_data.get('marital_status', 'Married'), 0)
+            adm_val = adm_type_map.get(patient_data.get('admission_type', 'Emergency'), 0)
+            loc_val = ward_map.get(patient_data.get('ward', 'General Ward'), 9)
         feature_mapping = {
-            'gender': 1 if patient_data.get('gender') == 'M' else 0,
-            'anchor_age': patient_data.get('anchor_age', 65),
+            'ckd': feat_ckd,
+            'cad_hf': feat_cad_hf,
+            'diabetes_type2': feat_diabetes,
+            'hypertension': feat_htn,
+            'copd_asthma': feat_resp,
+            'chronic_liver_disease': feat_liver,
+            'malignancy': feat_cancer,
+            'immunosuppressed': feat_immune,
+            'on_dialysis': feat_dialysis,
+            'on_oxygen': feat_oxygen,
+            'on_ventilator': feat_vent,
+            'on_vasopressors': feat_vaso,
+            'aki': 1 if feat_ckd and patient_data.get('lab_creatinine', 0) > 2.0 else 0,
+            'gender': gender_val,
+            'anchor_age': patient_data.get('anchor_age', patient_data.get('age', 65)),
+            'race': race_val,
+            'insurance': ins_val,
+            'marital_status': marital_val,
+            'admission_type': adm_val,
+            'admission_location': loc_val,
+            'discharge_location': 6,
             'num_admissions': patient_data.get('num_admissions', 1),
-            'avg_los_days': patient_data.get('avg_los_days', 3),
+            'avg_los_days': patient_data.get('avg_los_days', 3.0),
+            'los_days': patient_data.get('los_days', 3),
+            'duration_days': patient_data.get('los_days', 3),
+            'hospital_expire_flag': patient_data.get('ever_died_in_hospital', 0),
             'ever_died_in_hospital': patient_data.get('ever_died_in_hospital', 0),
-            'total_diagnoses': patient_data.get('total_diagnoses', 0),
-            'total_procedures': patient_data.get('total_procedures', 0),
-            'total_prescriptions': patient_data.get('total_prescriptions', len(patient_data.get('selected_drugs', []))),
-            'total_lab_tests': patient_data.get('total_lab_tests', 5),
-            'num_icu_stays': patient_data.get('num_icu_stays', 0),
-            'total_icu_los_days': patient_data.get('total_icu_los_days', 0),
-            'num_drugs': patient_data.get('num_drugs', len(patient_data.get('selected_drugs', []))),
-            'mean_adr_rate': patient_data.get('mean_adr_rate', 0.02),
-            'max_adr_rate': patient_data.get('max_adr_rate', 0.05),
-            'std_adr_rate': patient_data.get('std_adr_rate', 0.01),
-            'mean_severe_rate': patient_data.get('mean_severe_rate', 0.01),
-            'max_severe_rate': patient_data.get('max_severe_rate', 0.03),
-            'num_high_risk_drugs': patient_data.get('num_high_risk_drugs', 0),
-            'polypharmacy_flag': patient_data.get('polypharmacy_flag', 0),
-            'major_polypharmacy_flag': patient_data.get('major_polypharmacy_flag', 0),
+            'vital_heart_rate': patient_data.get('vital_heart_rate', 72),
+            'vital_respiratory_rate': patient_data.get('vital_respiratory_rate', 16),
+            'vital_temperature_celsius': patient_data.get('vital_temperature_celsius', 37.0),
+            'vital_spo2': patient_data.get('vital_spo2', 98),
+            'vital_arterial_blood_pressure_systolic': patient_data.get('vital_arterial_blood_pressure_systolic', 120),
+            'vital_arterial_blood_pressure_diastolic': patient_data.get('vital_arterial_blood_pressure_diastolic', 80),
+            'vital_arterial_blood_pressure_mean': patient_data.get('vital_arterial_blood_pressure_mean', 93),
             'lab_creatinine': patient_data.get('lab_creatinine', 1.0),
             'lab_hemoglobin': patient_data.get('lab_hemoglobin', 13.5),
             'lab_platelet_count': patient_data.get('lab_platelet_count', 250),
-            'lab_white_blood_cells': patient_data.get('lab_white_blood_cells', 7.5)
+            'lab_white_blood_cells': patient_data.get('lab_white_blood_cells', 7.5),
+            'lab_sodium': patient_data.get('lab_sodium', 140),
+            'lab_potassium': patient_data.get('lab_potassium', 4.0),
+            'lab_calcium_total': patient_data.get('lab_calcium_total', 9.0),
+            'lab_magnesium': patient_data.get('lab_magnesium', 2.0),
+            'lab_chloride': patient_data.get('lab_chloride', 100),
+            'lab_bicarbonate': patient_data.get('lab_bicarbonate', 24),
+            'lab_glucose': patient_data.get('lab_glucose', 100),
+            'lab_urea_nitrogen': patient_data.get('lab_urea_nitrogen', 15),
+            'alt_first': lab_alt, 'alt_last': lab_alt,
+            'ast_first': lab_ast, 'ast_last': lab_ast,
+            'alp_first': patient_data.get('lab_alp', 70), 'alp_last': patient_data.get('lab_alp', 70),
+            'total_bilirubin_first': lab_bilirubin,
+            'total_bilirubin_last': lab_bilirubin,
+            'total_diagnoses': patient_data.get('total_diagnoses', 0),
+            'total_procedures': patient_data.get('total_procedures', 0),
+            'total_prescriptions': patient_data.get('total_prescriptions', len(selected_drugs)),
+            'total_lab_tests': patient_data.get('total_lab_tests', 5),
+            'num_icu_stays': patient_data.get('num_icu_stays', 0),
+            'total_icu_los_days': patient_data.get('total_icu_los_days', 0.0),
+            'num_drugs': len(selected_drugs),
+            'mean_adr_rate': drug_risk_features['mean_adr_rate'],
+            'max_adr_rate': drug_risk_features['max_adr_rate'],
+            'std_adr_rate': drug_risk_features['std_adr_rate'],
+            'mean_severe_rate': drug_risk_features['mean_severe_rate'],
+            'max_severe_rate': drug_risk_features['max_severe_rate'],
+            'num_high_risk_drugs': drug_risk_features['num_high_risk_drugs'],
+            'polypharmacy_flag': polypharmacy_flag,
+            'major_polypharmacy_flag': major_polypharmacy_flag,
+            'renal_abnormal_flag': renal_abnormal_flag,
+            'hepatic_abnormal_flag': hepatic_abnormal_flag,
+            'anemia_flag': anemia_flag,
+            'thrombocytopenia_flag': thrombocytopenia_flag,
+            'infection_flag': infection_flag
         }
         
         # Update template with patient values
@@ -1231,7 +1327,7 @@ def page_prediction_results():
         leakage = ['weak_score', 'high_risk_drug', 'faers_adr_rate', 'faers_severe_rate']
         X_safe = X_template.drop(columns=[c for c in leakage if c in X_template.columns], errors='ignore')
         
-        dtest = xgb.DMatrix(X_safe)
+        dtest = xgb.DMatrix(X_safe.values)
         risk_proba = model.predict(dtest)[0]
         risk_category = get_risk_category(risk_proba)
         risk_color = get_risk_color(risk_category)
@@ -1943,9 +2039,8 @@ def process_uploaded_patient_data(patient_data):
     
     try:
         # Prepare features for model
-        X_template = pd.read_csv("models/feature_template.csv").iloc[0:1].copy()
-        for col in X_template.columns:
-            X_template[col] = 0
+        cols = pd.read_csv("models/feature_template.csv").columns
+        X_template = pd.DataFrame({c: [0] for c in cols})
         
         # Calculate derived clinical flags (replicating preprocess.py logic)
         renal_abnormal_flag = 1 if complete_patient_data.get('lab_creatinine', 0) > 1.5 else 0
@@ -2148,6 +2243,158 @@ def process_uploaded_patient_data(patient_data):
         return None
 
 
+def predict_patient_risk_pure(patient_data):
+    """Compute prediction without using Streamlit session state"""
+    try:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        model_path = os.path.join(base_dir, "models", "xgb_adr_model.json")
+        model = load_model(model_path)
+        cols = pd.read_csv("models/feature_template.csv").columns
+        X_template = pd.DataFrame({c: [0] for c in cols})
+        gender_val = 1 if str(patient_data.get('gender', 'M')).upper().startswith('M') else 0
+        selected_drugs = patient_data.get('selected_drugs', [])
+        if isinstance(selected_drugs, str):
+            selected_drugs = [d.strip() for d in selected_drugs.split(',')]
+        drug_risk_features = calculate_drug_risk_features(selected_drugs)
+        polypharmacy_flag = 1 if len(selected_drugs) >= 5 else 0
+        major_polypharmacy_flag = 1 if len(selected_drugs) >= 10 else 0
+        lab_alt = patient_data.get('lab_alt', 25)
+        lab_ast = patient_data.get('lab_ast', 30)
+        lab_bilirubin = patient_data.get('lab_bilirubin', 0.8)
+        renal_abnormal_flag = 1 if patient_data.get('lab_creatinine', 0) > 1.5 else 0
+        hepatic_abnormal_flag = 1 if (lab_alt > 40 or lab_ast > 40 or lab_bilirubin > 1.2) else 0
+        anemia_flag = 1 if patient_data.get('lab_hemoglobin', 13.5) < 10 else 0
+        thrombocytopenia_flag = 1 if patient_data.get('lab_platelet_count', 250) < 150 else 0
+        infection_flag = 1 if patient_data.get('lab_white_blood_cells', 7.5) > 12 else 0
+        comorbs = [c.lower() for c in patient_data.get('comorbidities', [])]
+        feat_ckd = 1 if any('kidney' in c or 'ckd' in c or 'renal' in c for c in comorbs) else 0
+        feat_cad_hf = 1 if any('heart' in c or 'failure' in c or 'cad' in c or 'hf' in c for c in comorbs) else 0
+        feat_diabetes = 1 if any('diabet' in c for c in comorbs) else 0
+        feat_htn = 1 if any('hypertens' in c or 'bp' in c for c in comorbs) else 0
+        feat_resp = 1 if any('asthma' in c or 'copd' in c for c in comorbs) else 0
+        feat_liver = 1 if any('liver' in c or 'cirrhosis' in c for c in comorbs) else 0
+        feat_cancer = 1 if any('cancer' in c or 'malignan' in c or 'tumor' in c or 'chemo' in c for c in comorbs) else 0
+        feat_immune = 1 if any('immune' in c or 'transplant' in c or 'hiv' in c for c in comorbs) else 0
+        feat_dialysis = 1 if any('dialysis' in c for c in comorbs) or patient_data.get('on_dialysis') else 0
+        feat_oxygen = 1 if any('oxygen' in c for c in comorbs) or patient_data.get('on_oxygen') else 0
+        feat_vent = 1 if patient_data.get('on_ventilator') else 0
+        feat_vaso = 1 if patient_data.get('on_vasopressors') else 0
+        encoders = load_encoders_map()
+        if encoders:
+            def get_enc(col, val, default=0):
+                if col in encoders:
+                    return encoders[col].get(str(val), encoders[col].get('Other', default))
+                return default
+            race_val = get_enc('race', patient_data.get('race', 'Other'))
+            ins_val = get_enc('insurance', patient_data.get('insurance', 'Medicare'))
+            marital_val = get_enc('marital_status', patient_data.get('marital_status', 'Married'))
+            adm_val = get_enc('admission_type', patient_data.get('admission_type', 'Emergency'))
+            loc_val = get_enc('admission_location', patient_data.get('ward', 'ICU'))
+        else:
+            race_map = {"White": 29, "Black": 4, "Hispanic": 12, "Asian": 2, "Other": 20}
+            ins_map = {"Medicare": 2, "Private": 4, "Medicaid": 1, "Other": 3}
+            marital_map = {"Married": 2, "Single": 4, "Widowed": 6, "Divorced": 1}
+            adm_type_map = {"Emergency": 5, "Inpatient": 1, "OPD": 6, "ICU": 2}
+            ward_map = {"General Ward": 9, "HDU": 3, "ICU": 2, "Private": 4}
+            race_val = race_map.get(patient_data.get('race', 'Other'), 0)
+            ins_val = ins_map.get(patient_data.get('insurance', 'Medicare'), 0)
+            marital_val = marital_map.get(patient_data.get('marital_status', 'Married'), 0)
+            adm_val = adm_type_map.get(patient_data.get('admission_type', 'Emergency'), 0)
+            loc_val = ward_map.get(patient_data.get('ward', 'General Ward'), 9)
+        feature_mapping = {
+            'ckd': feat_ckd,
+            'cad_hf': feat_cad_hf,
+            'diabetes_type2': feat_diabetes,
+            'hypertension': feat_htn,
+            'copd_asthma': feat_resp,
+            'chronic_liver_disease': feat_liver,
+            'malignancy': feat_cancer,
+            'immunosuppressed': feat_immune,
+            'on_dialysis': feat_dialysis,
+            'on_oxygen': feat_oxygen,
+            'on_ventilator': feat_vent,
+            'on_vasopressors': feat_vaso,
+            'aki': 1 if feat_ckd and patient_data.get('lab_creatinine', 0) > 2.0 else 0,
+            'gender': gender_val,
+            'anchor_age': patient_data.get('anchor_age', patient_data.get('age', 65)),
+            'race': race_val,
+            'insurance': ins_val,
+            'marital_status': marital_val,
+            'admission_type': adm_val,
+            'admission_location': loc_val,
+            'discharge_location': 6,
+            'num_admissions': patient_data.get('num_admissions', 1),
+            'avg_los_days': patient_data.get('avg_los_days', 3.0),
+            'los_days': patient_data.get('los_days', 3),
+            'duration_days': patient_data.get('los_days', 3),
+            'hospital_expire_flag': patient_data.get('ever_died_in_hospital', 0),
+            'ever_died_in_hospital': patient_data.get('ever_died_in_hospital', 0),
+            'vital_heart_rate': patient_data.get('vital_heart_rate', 72),
+            'vital_respiratory_rate': patient_data.get('vital_respiratory_rate', 16),
+            'vital_temperature_celsius': patient_data.get('vital_temperature_celsius', 37.0),
+            'vital_spo2': patient_data.get('vital_spo2', 98),
+            'vital_arterial_blood_pressure_systolic': patient_data.get('vital_arterial_blood_pressure_systolic', 120),
+            'vital_arterial_blood_pressure_diastolic': patient_data.get('vital_arterial_blood_pressure_diastolic', 80),
+            'vital_arterial_blood_pressure_mean': patient_data.get('vital_arterial_blood_pressure_mean', 93),
+            'lab_creatinine': patient_data.get('lab_creatinine', 1.0),
+            'lab_hemoglobin': patient_data.get('lab_hemoglobin', 13.5),
+            'lab_platelet_count': patient_data.get('lab_platelet_count', 250),
+            'lab_white_blood_cells': patient_data.get('lab_white_blood_cells', 7.5),
+            'lab_sodium': patient_data.get('lab_sodium', 140),
+            'lab_potassium': patient_data.get('lab_potassium', 4.0),
+            'lab_calcium_total': patient_data.get('lab_calcium_total', 9.0),
+            'lab_magnesium': patient_data.get('lab_magnesium', 2.0),
+            'lab_chloride': patient_data.get('lab_chloride', 100),
+            'lab_bicarbonate': patient_data.get('lab_bicarbonate', 24),
+            'lab_glucose': patient_data.get('lab_glucose', 100),
+            'lab_urea_nitrogen': patient_data.get('lab_urea_nitrogen', 15),
+            'alt_first': lab_alt, 'alt_last': lab_alt,
+            'ast_first': lab_ast, 'ast_last': lab_ast,
+            'alp_first': patient_data.get('lab_alp', 70), 'alp_last': patient_data.get('lab_alp', 70),
+            'total_bilirubin_first': lab_bilirubin,
+            'total_bilirubin_last': lab_bilirubin,
+            'total_diagnoses': patient_data.get('total_diagnoses', 0),
+            'total_procedures': patient_data.get('total_procedures', 0),
+            'total_prescriptions': patient_data.get('total_prescriptions', len(selected_drugs)),
+            'total_lab_tests': patient_data.get('total_lab_tests', 5),
+            'num_icu_stays': patient_data.get('num_icu_stays', 0),
+            'total_icu_los_days': patient_data.get('total_icu_los_days', 0.0),
+            'num_drugs': len(selected_drugs),
+            'mean_adr_rate': drug_risk_features['mean_adr_rate'],
+            'max_adr_rate': drug_risk_features['max_adr_rate'],
+            'std_adr_rate': drug_risk_features['std_adr_rate'],
+            'mean_severe_rate': drug_risk_features['mean_severe_rate'],
+            'max_severe_rate': drug_risk_features['max_severe_rate'],
+            'num_high_risk_drugs': drug_risk_features['num_high_risk_drugs'],
+            'polypharmacy_flag': polypharmacy_flag,
+            'major_polypharmacy_flag': major_polypharmacy_flag,
+            'renal_abnormal_flag': renal_abnormal_flag,
+            'hepatic_abnormal_flag': hepatic_abnormal_flag,
+            'anemia_flag': anemia_flag,
+            'thrombocytopenia_flag': thrombocytopenia_flag,
+            'infection_flag': infection_flag
+        }
+        for feature, value in feature_mapping.items():
+            if feature in X_template.columns:
+                X_template[feature] = value
+        X_template = X_template.fillna(X_template.median())
+        leakage = ['weak_score', 'high_risk_drug', 'faers_adr_rate', 'faers_severe_rate']
+        X_safe = X_template.drop(columns=[c for c in leakage if c in X_template.columns], errors='ignore')
+        X_safe = X_safe.apply(pd.to_numeric, errors='coerce').fillna(0)
+        if X_safe.shape[1] == 0:
+            X_safe = X_template.apply(pd.to_numeric, errors='coerce').fillna(0)
+        dtest = xgb.DMatrix(X_safe)
+        preds = model.predict(dtest)
+        risk_proba = preds[0] if isinstance(preds, (list, np.ndarray)) and len(preds) > 0 else float(preds)
+        risk_category = get_risk_category(risk_proba)
+        return {
+            'patient_data': patient_data,
+            'risk_score': risk_proba,
+            'risk_category': risk_category,
+            'timestamp': datetime.now().isoformat()
+        }
+    except Exception:
+        return None
 def render_patient_form():
     """Render patient entry form - Refactored into 8 Clinical Sections (Expanders)"""
     st.markdown(
@@ -3246,4 +3493,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

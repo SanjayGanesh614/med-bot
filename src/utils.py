@@ -195,8 +195,8 @@ def parse_fhir_patient(fhir_json: Dict) -> Dict:
                     med_name = med['medicationCodeableConcept'].get('text', '')
                     if med_name:
                         medications.append(med_name)
-                    if med_name:
-                        medications.append(med_name)
+            # Deduplicate while preserving order
+            medications = list(dict.fromkeys(medications))
             patient_data['medications'] = medications
             # Alias for app compatibility
             if 'selected_drugs' not in patient_data:
