@@ -38,4 +38,28 @@ DATABASE_URL = "postgres://your_user:your_password@your_host/your_db"
 5. Click **Save**.
 
 ## 3. Reboot Your App
-Streamlit will automatically restart. The app will detect the secret and connect to the Cloud Database instead of the local file. Your user accounts will now remain saved forever!
+
+## 4. Add Your Google Gemini API Key
+To enable the clinical recommendation features (LLM), you need a Google API Key.
+
+1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).
+2. Click **Create API Key**.
+3. Copy the key string.
+4. Go back to your Streamlit Cloud **Secrets** settings.
+5. Add a new line for the API key:
+
+```toml
+[database]
+url = "postgres://..."
+
+# Add this line below:
+GOOGLE_API_KEY = "AIzaSy..."
+```
+
+Your final `secrets.toml` area should look something like this:
+
+```toml
+DATABASE_URL = "postgres://user:pass@host/db"
+GOOGLE_API_KEY = "AIzaSyYourKeyHere"
+```
+

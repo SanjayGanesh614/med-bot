@@ -806,7 +806,8 @@ def page_patient_entry():
     st.markdown("""
     <style>
     /* Force specific styling for buttons in this view */
-    div[data-testid="stHorizontalBlock"] button[kind="primary"] {
+    /* Force specific styling for buttons in this view */
+    button[kind="primary"] {
         background-color: #111827 !important;
         color: #FFFFFF !important;
         border-radius: 999px !important;
@@ -814,10 +815,11 @@ def page_patient_entry():
         border: none !important;
         box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08) !important;
     }
-    div[data-testid="stHorizontalBlock"] button[kind="primary"]:hover {
+    button[kind="primary"]:hover {
         background-color: #030712 !important;
         box-shadow: 0 14px 28px rgba(15, 23, 42, 0.16) !important;
         transform: translateY(-1px);
+        color: #FFFFFF !important;
     }
     div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
         background-color: #FFFFFF !important;
@@ -922,10 +924,21 @@ def calculate_drug_risk_features(selected_drugs):
             'num_high_risk_drugs': 0
         }
     
+    # Load FAERS drug data
     try:
-        # Load FAERS drug data
-        # Fix: Use correct path 'colabupload' instead of 'data/output'
-        faers_data = pd.read_csv("colabupload/faers_drug_summary.csv")
+        # Robust path finding
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        data_path = os.path.join(base_dir, "colabupload", "faers_drug_summary.csv")
+        
+        if not os.path.exists(data_path):
+            # Try alternative path (if running from root)
+            if os.path.exists("colabupload/faers_drug_summary.csv"):
+                data_path = "colabupload/faers_drug_summary.csv"
+            else:
+                print(f"Warning: FAERS data not found at {data_path}")
+                raise FileNotFoundError("FAERS data file not found")
+                
+        faers_data = pd.read_csv(data_path)
         
         # Get drug risk data for selected drugs
         drug_rates = []
@@ -976,8 +989,18 @@ def analyze_drug_risks(selected_drugs):
         return {'top_drugs': [], 'high_risk_count': 0, 'mean_adr_rate': 0, 'max_severe_rate': 0}
     
     try:
-        # Fix: Use correct path
-        faers_data = pd.read_csv("colabupload/faers_drug_summary.csv")
+        # Robust path finding
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        data_path = os.path.join(base_dir, "colabupload", "faers_drug_summary.csv")
+        
+        if not os.path.exists(data_path):
+            # Try alternative path
+            if os.path.exists("colabupload/faers_drug_summary.csv"):
+                data_path = "colabupload/faers_drug_summary.csv"
+            else:
+                raise FileNotFoundError("FAERS data file not found")
+                
+        faers_data = pd.read_csv(data_path)
         
         drug_info = []
         for drug in selected_drugs:
@@ -3240,7 +3263,20 @@ def render_explainability_tab():
         st.subheader("Patient-Specific SHAP Analysis")
         try:
             # Prepare features (same as in prediction)
-            X_template = pd.read_csv("models/feature_template.csv").iloc[0:1].copy()
+            # Prepare features (same as in prediction)
+            # Robust path finding
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            template_path = os.path.join(base_dir, "models", "feature_template.csv")
+            
+            if os.path.exists(template_path):
+                X_template = pd.read_csv(template_path).iloc[0:1].copy()
+            elif os.path.exists("models/feature_template.csv"):
+                X_template = pd.read_csv("models/feature_template.csv").iloc[0:1].copy()
+            else:
+                raise FileNotFoundError("Feature template not found")
+
+            if X_template.empty:
+                raise ValueError("Feature template is empty")
             for col in X_template.columns:
                 X_template[col] = 0
             
@@ -3365,14 +3401,22 @@ def render_explainability_tab():
                 st.warning(f"Could not compute SHAP values: {e}")
                 st.info("Showing model feature importance instead...")
                 
-                feature_importance = model.feature_importances_
-                feature_names = X_template.columns
-                
-                importance_df = pd.DataFrame({
-                    'Feature': [f.replace('_', ' ').title() for f in feature_names],
-                    'Importance': feature_importance
-                }).sort_values('Importance', ascending=False).head(10)
-                
+                if hasattr(model, 'feature_importances_'):
+                    feature_importance = model.feature_importances_
+                    feature_names = X_template.columns
+                    
+                    importance_df = pd.DataFrame({
+                        'Feature': [f.replace('_', ' ').title() for f in feature_names],
+                        'Importance': feature_importance
+                    }).sort_values('Importance', ascending=False).head(10)
+                else:
+                    # Fallback for Booster object
+                    score = model.get_score(importance_type='gain')
+                    importance_df = pd.DataFrame({
+                        'Feature': [k.replace('_', ' ').title() for k in score.keys()],
+                        'Importance': list(score.values())
+                    }).sort_values('Importance', ascending=False).head(10)
+
                 st.dataframe(importance_df, hide_index=True)
                 
         except Exception as e:
@@ -3562,7 +3606,21 @@ def main():
     if current_page == "dashboard":
         # === DASHBOARD MODE ===
         # Ensure sidebar is visible
-        st.markdown("""<style>[data-testid="stSidebar"] {display: block !important;}</style>""", unsafe_allow_html=True)
+        # Ensure sidebar is visible and light-themed
+        st.markdown("""
+            <style>
+                [data-testid="stSidebar"] {
+                    display: block !important;
+                    background-color: #F8FAFC !important;
+                }
+                [data-testid="stSidebar"] .block-container {
+                    color: #1F2937 !important;
+                }
+                [data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] label, [data-testid="stSidebar"] div {
+                    color: #1F2937 !important;
+                }
+            </style>
+        """, unsafe_allow_html=True)
         
         user = st.session_state['user']
         

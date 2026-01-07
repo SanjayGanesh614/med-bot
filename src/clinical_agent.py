@@ -8,15 +8,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configure the API key
-API_KEY = os.environ.get("GOOGLE_API_KEY") 
+API_KEY = None
 
-# Fallback to secrets if not in env, but wrap in try-except to avoid crashing if empty
+# 1. Try loading from Streamlit Secrets (Preferred for Cloud)
+try:
+    if "GOOGLE_API_KEY" in st.secrets:
+        API_KEY = st.secrets["GOOGLE_API_KEY"]
+except (FileNotFoundError, AttributeError):
+    pass # Secrets not available
+
+# 2. Key not in secrets? Try Environment Variables (Preferred for Local .env)
 if not API_KEY:
-    try:
-        if "GOOGLE_API_KEY" in st.secrets:
-            API_KEY = st.secrets["GOOGLE_API_KEY"]
-    except FileNotFoundError:
-        pass # No secrets file found, ignore
+    API_KEY = os.environ.get("GOOGLE_API_KEY")
 
 if API_KEY:
     genai.configure(api_key=API_KEY)
