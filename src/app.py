@@ -1326,8 +1326,8 @@ def page_prediction_results():
         # Fix: Use DMatrix for Booster and remove leakage
         leakage = ['weak_score', 'high_risk_drug', 'faers_adr_rate', 'faers_severe_rate']
         X_safe = X_template.drop(columns=[c for c in leakage if c in X_template.columns], errors='ignore')
-        
-        dtest = xgb.DMatrix(X_safe.values)
+        X_safe = X_safe.apply(pd.to_numeric, errors='coerce').fillna(0)
+        dtest = xgb.DMatrix(X_safe)
         risk_proba = model.predict(dtest)[0]
         risk_category = get_risk_category(risk_proba)
         risk_color = get_risk_color(risk_category)
