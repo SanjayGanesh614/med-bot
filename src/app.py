@@ -1435,6 +1435,7 @@ def page_prediction_results():
             # Correct way to get importance from Booster
             importance_map = model.get_score(importance_type='gain')
             # Map valid features, default to 0
+            feature_names = pd.read_csv("models/feature_template.csv").columns
             feature_importance = [importance_map.get(f, 0) for f in feature_names]
             
             importance_df = pd.DataFrame({
