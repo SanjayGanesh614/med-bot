@@ -1327,8 +1327,17 @@ def page_prediction_results():
         leakage = ['weak_score', 'high_risk_drug', 'faers_adr_rate', 'faers_severe_rate']
         X_safe = X_template.drop(columns=[c for c in leakage if c in X_template.columns], errors='ignore')
         X_safe = X_safe.apply(pd.to_numeric, errors='coerce').fillna(0)
+        if X_safe.shape[1] == 0:
+            X_safe = X_template.apply(pd.to_numeric, errors='coerce').fillna(0)
         dtest = xgb.DMatrix(X_safe)
-        risk_proba = model.predict(dtest)[0]
+        preds = model.predict(dtest)
+        if isinstance(preds, (list, np.ndarray)) and len(preds) > 0:
+            risk_proba = preds[0]
+        elif np.isscalar(preds):
+            risk_proba = float(preds)
+        else:
+            print(f"Prediction Error: Model returned {preds}")
+            risk_proba = 0.0
         risk_category = get_risk_category(risk_proba)
         risk_color = get_risk_color(risk_category)
         
