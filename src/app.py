@@ -1375,8 +1375,8 @@ def page_prediction_results():
             feat_dialysis
         ]
         severity_count = sum(1 for f in severity_flags if f)
-        icu_context = 1 if str(complete_patient_data.get('admission_location', '')).upper() == 'ICU' or complete_patient_data.get('num_icu_stays', 0) > 0 else 0
-        drug_severe = 1 if complete_patient_data.get('max_severe_rate', 0) > 0.15 or complete_patient_data.get('num_high_risk_drugs', 0) >= 2 else 0
+        icu_context = 1 if str(patient_data.get('admission_location', '')).upper() == 'ICU' or patient_data.get('num_icu_stays', 0) > 0 else 0
+        drug_severe = 1 if drug_risk_features.get('max_severe_rate', 0) > 0.15 or drug_risk_features.get('num_high_risk_drugs', 0) >= 2 else 0
         if icu_context and severity_count >= 4 and drug_severe:
             risk_proba = max(risk_proba, 0.75)
         elif severity_count >= 3 and drug_severe:
