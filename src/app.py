@@ -20,7 +20,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.utils import (
     load_model, get_risk_category, get_risk_color, 
     create_prediction_summary, generate_report_filename, parse_fhir_patient,
-    get_data_path, get_project_root
+    get_data_path, get_project_root, find_best_drug_match
 )
 from src.explainability import SHAPExplainer
 from src.evaluate import ModelEvaluator
@@ -2037,8 +2037,6 @@ def parse_csv_patient(csv_data):
 
 def process_uploaded_patient_data(patient_data):
     """Process uploaded patient data and make prediction"""
-    # Debug: See what data is actually coming in
-    # st.write("Debug - Incoming Patient Data:", patient_data) 
     
     # Normalize gender
     if isinstance(patient_data.get('gender'), str):
@@ -2057,7 +2055,6 @@ def process_uploaded_patient_data(patient_data):
     major_polypharmacy_flag = 1 if len(selected_drugs) >= 10 else 0
     
     # Prepare complete patient data
-    # Prepare complete patient data (Start with copy to preserve all keys like comorbidities, labs)
     complete_patient_data = patient_data.copy()
     
     # Update with calculated/normalized fields
@@ -2083,7 +2080,6 @@ def process_uploaded_patient_data(patient_data):
         'num_high_risk_drugs': drug_risk_features['num_high_risk_drugs'],
         'polypharmacy_flag': polypharmacy_flag,
         'major_polypharmacy_flag': major_polypharmacy_flag,
-        # Ensure Critical Labs are set (defaults handled in mapping but good to have here)
         'lab_creatinine': patient_data.get('lab_creatinine', 1.0),
         'lab_hemoglobin': patient_data.get('lab_hemoglobin', 13.5),
         'lab_platelet_count': patient_data.get('lab_platelet_count', 250),
@@ -2094,7 +2090,6 @@ def process_uploaded_patient_data(patient_data):
     if 'patients' not in st.session_state:
         st.session_state['patients'] = []
     st.session_state['patients'].append(complete_patient_data)
-    # Also set as current patient for detailed results view
     st.session_state['patient_data'] = complete_patient_data
     
     # Make prediction
@@ -2109,37 +2104,24 @@ def process_uploaded_patient_data(patient_data):
         cols = pd.read_csv(template_path).columns
         X_template = pd.DataFrame({c: [0] for c in cols})
         
-        # Calculate derived clinical flags (replicating preprocess.py logic)
+        # Calculate derived clinical flags
         renal_abnormal_flag = 1 if complete_patient_data.get('lab_creatinine', 0) > 1.5 else 0
-        
-        # Hepatic flag: ALT > 40 OR AST > 40 OR Bilirubin > 1.2
-        # Note: Bilirubin might be missing in form, default to 0.8 (normal)
         lab_alt = complete_patient_data.get('lab_alt', 25)
         lab_ast = complete_patient_data.get('lab_ast', 30)
         lab_bilirubin = complete_patient_data.get('lab_bilirubin', 0.8)
-        
         hepatic_abnormal_flag = 1 if (lab_alt > 40 or lab_ast > 40 or lab_bilirubin > 1.2) else 0
-        
-        # Anemia: Hemoglobin < 10
         anemia_flag = 1 if complete_patient_data.get('lab_hemoglobin', 13.5) < 10 else 0
-        
-        # Thrombocytopenia: Platelets < 150
         thrombocytopenia_flag = 1 if complete_patient_data.get('lab_platelet_count', 250) < 150 else 0
-        
-        # Infection: WBC > 12
         infection_flag = 1 if complete_patient_data.get('lab_white_blood_cells', 7.5) > 12 else 0
 
-        # --- Fix: Map Comorbidities to Model Features ---
+        # Map Comorbidities
         comorbs = [c.lower() for c in complete_patient_data.get('comorbidities', [])]
-        
         feat_ckd = 1 if any('kidney' in c or 'ckd' in c or 'renal' in c for c in comorbs) else 0
         feat_cad_hf = 1 if any('heart' in c or 'failure' in c or 'cad' in c or 'hf' in c for c in comorbs) else 0
         feat_diabetes = 1 if any('diabet' in c for c in comorbs) else 0
         feat_htn = 1 if any('hypertens' in c or 'bp' in c for c in comorbs) else 0
         feat_resp = 1 if any('asthma' in c or 'copd' in c for c in comorbs) else 0
         feat_liver = 1 if any('liver' in c or 'cirrhosis' in c for c in comorbs) else 0
-        
-        # New: Extended Feature Mapping
         feat_cancer = 1 if any('cancer' in c or 'malignan' in c or 'tumor' in c or 'chemo' in c for c in comorbs) else 0
         feat_immune = 1 if any('immune' in c or 'transplant' in c or 'hiv' in c for c in comorbs) else 0
         feat_dialysis = 1 if any('dialysis' in c for c in comorbs) or complete_patient_data.get('on_dialysis') else 0
@@ -2147,8 +2129,14 @@ def process_uploaded_patient_data(patient_data):
         feat_vent = 1 if complete_patient_data.get('on_ventilator') else 0
         feat_vaso = 1 if complete_patient_data.get('on_vasopressors') else 0
 
-        # --- Categorical Encodings (Dynamic from encoders.json) ---
+        # Encoders
         encoders = load_encoders_map()
+        
+        race_val = 0
+        ins_val = 0
+        marital_val = 0
+        adm_val = 0
+        loc_val = 0
         
         if encoders:
             def get_enc(col, val, default=0):
@@ -2160,41 +2148,19 @@ def process_uploaded_patient_data(patient_data):
             marital_val = get_enc('marital_status', complete_patient_data.get('marital_status', 'Married'))
             adm_val = get_enc('admission_type', complete_patient_data.get('admission_type', 'Emergency'))
             loc_val = get_enc('admission_location', complete_patient_data.get('ward', 'ICU'))
-            primary_drug = None
-            sd = complete_patient_data.get('selected_drugs', [])
-            if sd:
-                da = analyze_drug_risks(sd)
-                if da.get('top_drugs'):
-                    primary_drug = da['top_drugs'][0][0]
-                else:
-                    primary_drug = sd[0]
-            encoded_drug = get_enc('drug', normalize_drug_name(primary_drug)) if primary_drug else 0
-            med_route = None
-            meds = complete_patient_data.get('medications_detailed', [])
-            if primary_drug and isinstance(meds, list):
-                for m in meds:
-                    if str(m.get('name', '')).lower() == str(primary_drug).lower():
-                        med_route = m.get('route')
-                        break
-            encoded_route = get_enc('route', med_route if med_route else 'IV')
         else:
-            # Fallback (Approximate indices if encoders.json missing)
             race_map = {"White": 29, "Black": 4, "Hispanic": 12, "Asian": 2, "Other": 20} 
             ins_map = {"Medicare": 2, "Private": 4, "Medicaid": 1, "Other": 3}
             marital_map = {"Married": 2, "Single": 4, "Widowed": 6, "Divorced": 1}
             adm_type_map = {"Emergency": 5, "Inpatient": 1, "OPD": 6, "ICU": 2}
             ward_map = {"General Ward": 9, "HDU": 3, "ICU": 2, "Private": 4} 
-
             race_val = race_map.get(complete_patient_data.get('race', 'Other'), 0)
             ins_val = ins_map.get(complete_patient_data.get('insurance', 'Medicare'), 0)
             marital_val = marital_map.get(complete_patient_data.get('marital_status', 'Married'), 0)
             adm_val = adm_type_map.get(complete_patient_data.get('admission_type', 'Emergency'), 0)
             loc_val = ward_map.get(complete_patient_data.get('ward', 'General Ward'), 9)
-            encoded_drug = 0
-            encoded_route = 0
-
+        
         feature_mapping = {
-            # Comorbidities (CRITICAL MISSING SIGNALS)
             'ckd': feat_ckd,
             'cad_hf': feat_cad_hf,
             'diabetes_type2': feat_diabetes,
@@ -2208,26 +2174,20 @@ def process_uploaded_patient_data(patient_data):
             'on_ventilator': feat_vent,
             'on_vasopressors': feat_vaso,
             'aki': 1 if feat_ckd and complete_patient_data.get('lab_creatinine', 0) > 2.0 else 0,
-
-            # Demographics & Context
-            'gender': 1 if str(complete_patient_data['gender']).upper().startswith('M') else 0,
+            'gender': gender_val,
             'anchor_age': complete_patient_data['anchor_age'],
             'race': race_val,
             'insurance': ins_val,
             'marital_status': marital_val,
             'admission_type': adm_val,
-            'admission_location': loc_val, # Mapped from Ward
-            'discharge_location': 6, # Default to Home (6)
-            
-            # Hospitalization
+            'admission_location': loc_val,
+            'discharge_location': 6,
             'num_admissions': complete_patient_data['num_admissions'],
             'avg_los_days': complete_patient_data['avg_los_days'],
             'los_days': complete_patient_data.get('los_days', 3), 
-            'duration_days': complete_patient_data.get('los_days', 3), # Model alias
-            'hospital_expire_flag': complete_patient_data['ever_died_in_hospital'], # Model alias
-            'ever_died_in_hospital': complete_patient_data['ever_died_in_hospital'], # Keep original just in case
-            
-            # Vitals
+            'duration_days': complete_patient_data.get('los_days', 3),
+            'hospital_expire_flag': complete_patient_data['ever_died_in_hospital'],
+            'ever_died_in_hospital': complete_patient_data['ever_died_in_hospital'],
             'vital_heart_rate': complete_patient_data.get('vital_heart_rate', 72),
             'vital_respiratory_rate': complete_patient_data.get('vital_respiratory_rate', 16),
             'vital_temperature_celsius': complete_patient_data.get('vital_temperature_celsius', 37.0),
@@ -2235,8 +2195,6 @@ def process_uploaded_patient_data(patient_data):
             'vital_arterial_blood_pressure_systolic': complete_patient_data.get('vital_arterial_blood_pressure_systolic', 120),
             'vital_arterial_blood_pressure_diastolic': complete_patient_data.get('vital_arterial_blood_pressure_diastolic', 80),
             'vital_arterial_blood_pressure_mean': complete_patient_data.get('vital_arterial_blood_pressure_mean', 93),
-
-            # Labs (Comprehensive)
             'lab_creatinine': complete_patient_data['lab_creatinine'],
             'lab_hemoglobin': complete_patient_data['lab_hemoglobin'],
             'lab_platelet_count': complete_patient_data['lab_platelet_count'],
@@ -2249,16 +2207,11 @@ def process_uploaded_patient_data(patient_data):
             'lab_bicarbonate': complete_patient_data.get('lab_bicarbonate', 24),
             'lab_glucose': complete_patient_data.get('lab_glucose', 100),
             'lab_urea_nitrogen': complete_patient_data.get('lab_urea_nitrogen', 15),
-            
-            # Liver
-            'alt_first': lab_alt, 'alt_last': lab_alt, # Assume current is singular
+            'alt_first': lab_alt, 'alt_last': lab_alt,
             'ast_first': lab_ast, 'ast_last': lab_ast,
-            'alp_first': complete_patient_data.get('lab_alp', 70), 
-            'alp_last': complete_patient_data.get('lab_alp', 70),
+            'alp_first': complete_patient_data.get('lab_alp', 70), 'alp_last': complete_patient_data.get('lab_alp', 70),
             'total_bilirubin_first': lab_bilirubin,
             'total_bilirubin_last': lab_bilirubin,
-
-            # Drug Stats
             'total_diagnoses': complete_patient_data['total_diagnoses'],
             'total_procedures': complete_patient_data['total_procedures'],
             'total_prescriptions': complete_patient_data['total_prescriptions'],
@@ -2266,19 +2219,15 @@ def process_uploaded_patient_data(patient_data):
             'num_icu_stays': complete_patient_data['num_icu_stays'],
             'total_icu_los_days': complete_patient_data['total_icu_los_days'],
             'num_drugs': complete_patient_data['num_drugs'],
-            'drug_encoded': encoded_drug,
-            'route_encoded': encoded_route,
             'icu_total_los': complete_patient_data['total_icu_los_days'],
-            'mean_adr_rate': complete_patient_data['mean_adr_rate'],
-            'max_adr_rate': complete_patient_data['max_adr_rate'],
-            'std_adr_rate': complete_patient_data['std_adr_rate'],
-            'mean_severe_rate': complete_patient_data['mean_severe_rate'],
-            'max_severe_rate': complete_patient_data['max_severe_rate'],
-            'num_high_risk_drugs': complete_patient_data['num_high_risk_drugs'],
-            'polypharmacy_flag': complete_patient_data['polypharmacy_flag'],
-            'major_polypharmacy_flag': complete_patient_data['major_polypharmacy_flag'],
-            
-            # Derived Flags
+            'mean_adr_rate': drug_risk_features['mean_adr_rate'],
+            'max_adr_rate': drug_risk_features['max_adr_rate'],
+            'std_adr_rate': drug_risk_features['std_adr_rate'],
+            'mean_severe_rate': drug_risk_features['mean_severe_rate'],
+            'max_severe_rate': drug_risk_features['max_severe_rate'],
+            'num_high_risk_drugs': drug_risk_features['num_high_risk_drugs'],
+            'polypharmacy_flag': polypharmacy_flag,
+            'major_polypharmacy_flag': major_polypharmacy_flag,
             'renal_abnormal_flag': renal_abnormal_flag,
             'hepatic_abnormal_flag': hepatic_abnormal_flag,
             'anemia_flag': anemia_flag,
@@ -2290,27 +2239,74 @@ def process_uploaded_patient_data(patient_data):
             if feature in X_template.columns:
                 X_template[feature] = value
         
-        X_template = X_template.fillna(X_template.median())
+        # --- PER-DRUG PREDICTION LOOP ---
+        max_risk_proba = 0.0
+        drugs_to_check = selected_drugs if selected_drugs else ["None"]
         
-        # Make prediction
-        # Fix: Use DMatrix for Booster and remove leakage
-        leakage = ['weak_score', 'high_risk_drug', 'faers_adr_rate', 'faers_severe_rate']
-        X_safe = X_template.drop(columns=[c for c in leakage if c in X_template.columns], errors='ignore')
+        for drug_name in drugs_to_check:
+            # 1. Encode
+            encoded_drug = 0
+            encoded_route = 0
+            if encoders:
+                 # Use new fuzzy matching from utils
+                 norm_key = find_best_drug_match(drug_name, list(encoders['drug'].keys()))
+                 if norm_key:
+                      encoded_drug = encoders['drug'].get(norm_key, 0)
+                 
+                 meds = complete_patient_data.get('medications_detailed', [])
+                 med_route = 'IV'
+                 if isinstance(meds, list):
+                     for m in meds:
+                         if str(m.get('name', '')).lower() == str(drug_name).lower():
+                             med_route = m.get('route', 'IV')
+                             break
+                 if 'route' in encoders:
+                      encoded_route = encoders['route'].get(str(med_route), 0)
+            
+            # 2. Update Template
+            if 'drug_encoded' in X_template.columns:
+                X_template['drug_encoded'] = encoded_drug
+            if 'route_encoded' in X_template.columns:
+                X_template['route_encoded'] = encoded_route
+                
+            # 3. Impute & Predict
+            X_current = X_template.fillna(X_template.median())
+            X_safe = X_current.drop(columns=[c for c in leakage if c in X_current.columns], errors='ignore')
+            X_safe = X_safe.apply(pd.to_numeric, errors='coerce').fillna(0)
+            
+            dtest = xgb.DMatrix(X_safe, feature_names=list(X_safe.columns))
+            preds = model.predict(dtest)
+            
+            current_proba = 0.0
+            if isinstance(preds, (list, np.ndarray)) and len(preds) > 0:
+                current_proba = preds[0]
+            elif np.isscalar(preds):
+                current_proba = preds
+            
+            if current_proba > max_risk_proba:
+                max_risk_proba = current_proba
         
-        X_safe = X_safe.apply(pd.to_numeric, errors='coerce').fillna(0)
-        dtest = xgb.DMatrix(X_safe, feature_names=list(X_safe.columns))
-        preds = model.predict(dtest)
+        # Use Max Risk
+        risk_proba = max_risk_proba
         
-        if isinstance(preds, (list, np.ndarray)) and len(preds) > 0:
-            risk_proba = preds[0]
-        elif np.isscalar(preds):
-            risk_proba = preds
-        else:
-             print(f"Prediction Error: Model returned {preds}")
-             risk_proba = 0.0
+        # Apply Clinical Heuristics
+        severity_flags = [
+            renal_abnormal_flag, hepatic_abnormal_flag, anemia_flag,
+            thrombocytopenia_flag, infection_flag, feat_vent, feat_vaso, feat_dialysis
+        ]
+        severity_count = sum(1 for f in severity_flags if f)
+        icu_context = 1 if str(patient_data.get('admission_location', '')).upper() == 'ICU' or patient_data.get('num_icu_stays', 0) > 0 else 0
+        drug_severe = 1 if drug_risk_features.get('max_severe_rate', 0) > 0.15 or drug_risk_features.get('num_high_risk_drugs', 0) >= 2 else 0
+        
+        if icu_context and severity_count >= 4 and drug_severe:
+            risk_proba = max(risk_proba, 0.75)
+        elif severity_count >= 3 and drug_severe:
+            risk_proba = max(risk_proba, 0.55)
+        elif severity_count >= 2:
+            risk_proba = max(risk_proba, 0.35)
+            
         risk_category = get_risk_category(risk_proba)
         
-        # Store prediction
         prediction = {
             'patient_data': complete_patient_data,
             'risk_score': risk_proba,
@@ -2336,16 +2332,23 @@ def predict_patient_risk_pure(patient_data):
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         model_path = os.path.join(base_dir, "models", "xgb_adr_model.json")
         model = load_model(model_path)
+        encoders = load_encoders_map()
+        
         template_path = get_data_path("feature_template.csv")
         cols = pd.read_csv(template_path).columns
         X_template = pd.DataFrame({c: [0] for c in cols})
+        
+        # Normalize Data
         gender_val = 1 if str(patient_data.get('gender', 'M')).upper().startswith('M') else 0
         selected_drugs = patient_data.get('selected_drugs', [])
         if isinstance(selected_drugs, str):
             selected_drugs = [d.strip() for d in selected_drugs.split(',')]
+            
         drug_risk_features = calculate_drug_risk_features(selected_drugs)
         polypharmacy_flag = 1 if len(selected_drugs) >= 5 else 0
         major_polypharmacy_flag = 1 if len(selected_drugs) >= 10 else 0
+        
+        # Clinical Flags
         lab_alt = patient_data.get('lab_alt', 25)
         lab_ast = patient_data.get('lab_ast', 30)
         lab_bilirubin = patient_data.get('lab_bilirubin', 0.8)
@@ -2354,6 +2357,8 @@ def predict_patient_risk_pure(patient_data):
         anemia_flag = 1 if patient_data.get('lab_hemoglobin', 13.5) < 10 else 0
         thrombocytopenia_flag = 1 if patient_data.get('lab_platelet_count', 250) < 150 else 0
         infection_flag = 1 if patient_data.get('lab_white_blood_cells', 7.5) > 12 else 0
+
+        # Comorbidities
         comorbs = [c.lower() for c in patient_data.get('comorbidities', [])]
         feat_ckd = 1 if any('kidney' in c or 'ckd' in c or 'renal' in c for c in comorbs) else 0
         feat_cad_hf = 1 if any('heart' in c or 'failure' in c or 'cad' in c or 'hf' in c for c in comorbs) else 0
@@ -2367,33 +2372,26 @@ def predict_patient_risk_pure(patient_data):
         feat_oxygen = 1 if any('oxygen' in c for c in comorbs) or patient_data.get('on_oxygen') else 0
         feat_vent = 1 if patient_data.get('on_ventilator') else 0
         feat_vaso = 1 if patient_data.get('on_vasopressors') else 0
-        encoders = load_encoders_map()
+
+        # Encoders
+        race_val = 0
+        ins_val = 0
+        marital_val = 0
+        adm_val = 0
+        loc_val = 0
+        encoded_drug = 0
+        encoded_route = 0
+        
         if encoders:
             def get_enc(col, val, default=0):
                 if col in encoders:
-                    return encoders[col].get(str(val), encoders[col].get('Other', default))
+                    return encoders[col].get(str(val), encoders[col].get('<<NA>>', default))
                 return default
             race_val = get_enc('race', patient_data.get('race', 'Other'))
             ins_val = get_enc('insurance', patient_data.get('insurance', 'Medicare'))
             marital_val = get_enc('marital_status', patient_data.get('marital_status', 'Married'))
             adm_val = get_enc('admission_type', patient_data.get('admission_type', 'Emergency'))
             loc_val = get_enc('admission_location', patient_data.get('ward', 'ICU'))
-            primary_drug = None
-            if selected_drugs:
-                da = analyze_drug_risks(selected_drugs)
-                if da.get('top_drugs'):
-                    primary_drug = da['top_drugs'][0][0]
-                else:
-                    primary_drug = selected_drugs[0]
-            encoded_drug = get_enc('drug', primary_drug) if primary_drug else 0
-            med_route = None
-            meds = patient_data.get('medications_detailed', [])
-            if primary_drug and isinstance(meds, list):
-                for m in meds:
-                    if str(m.get('name', '')).lower() == str(primary_drug).lower():
-                        med_route = m.get('route')
-                        break
-            encoded_route = get_enc('route', med_route if med_route else 'IV')
         else:
             race_map = {"White": 29, "Black": 4, "Hispanic": 12, "Asian": 2, "Other": 20}
             ins_map = {"Medicare": 2, "Private": 4, "Medicaid": 1, "Other": 3}
@@ -2405,8 +2403,7 @@ def predict_patient_risk_pure(patient_data):
             marital_val = marital_map.get(patient_data.get('marital_status', 'Married'), 0)
             adm_val = adm_type_map.get(patient_data.get('admission_type', 'Emergency'), 0)
             loc_val = ward_map.get(patient_data.get('ward', 'General Ward'), 9)
-            encoded_drug = 0
-            encoded_route = 0
+
         feature_mapping = {
             'ckd': feat_ckd,
             'cad_hf': feat_cad_hf,
@@ -2466,8 +2463,6 @@ def predict_patient_risk_pure(patient_data):
             'num_icu_stays': patient_data.get('num_icu_stays', 0),
             'total_icu_los_days': patient_data.get('total_icu_los_days', 0.0),
             'num_drugs': len(selected_drugs),
-            'drug_encoded': encoded_drug,
-            'route_encoded': encoded_route,
             'icu_total_los': patient_data.get('total_icu_los_days', 0.0),
             'mean_adr_rate': drug_risk_features['mean_adr_rate'],
             'max_adr_rate': drug_risk_features['max_adr_rate'],
@@ -2483,37 +2478,79 @@ def predict_patient_risk_pure(patient_data):
             'thrombocytopenia_flag': thrombocytopenia_flag,
             'infection_flag': infection_flag
         }
+        
         for feature, value in feature_mapping.items():
             if feature in X_template.columns:
                 X_template[feature] = value
-        X_template = X_template.fillna(X_template.median())
+                
+        # --- PER-DRUG PREDICTION LOOP ---
+        max_risk_proba = 0.0
+        drugs_to_check = selected_drugs if selected_drugs else ["None"]
         leakage = ['weak_score', 'high_risk_drug', 'faers_adr_rate', 'faers_severe_rate']
-        X_safe = X_template.drop(columns=[c for c in leakage if c in X_template.columns], errors='ignore')
-        X_safe = X_safe.apply(pd.to_numeric, errors='coerce').fillna(0)
-        if X_safe.shape[1] == 0:
-            X_safe = X_template.apply(pd.to_numeric, errors='coerce').fillna(0)
-        dtest = xgb.DMatrix(X_safe)
-        preds = model.predict(dtest)
-        risk_proba = preds[0] if isinstance(preds, (list, np.ndarray)) and len(preds) > 0 else float(preds)
+        
+        for drug_name in drugs_to_check:
+            # 1. Encode
+            encoded_drug = 0
+            encoded_route = 0
+            if encoders:
+                 # Use new fuzzy matching from utils
+                 norm_key = find_best_drug_match(drug_name, list(encoders['drug'].keys()))
+                 if norm_key:
+                      encoded_drug = encoders['drug'].get(norm_key, 0)
+                 
+                 meds = patient_data.get('medications_detailed', [])
+                 med_route = 'IV'
+                 if isinstance(meds, list):
+                     for m in meds:
+                         if str(m.get('name', '')).lower() == str(drug_name).lower():
+                             med_route = m.get('route', 'IV')
+                             break
+                 if 'route' in encoders:
+                      encoded_route = encoders['route'].get(str(med_route), 0)
+            
+            # 2. Update
+            if 'drug_encoded' in X_template.columns:
+                X_template['drug_encoded'] = encoded_drug
+            if 'route_encoded' in X_template.columns:
+                X_template['route_encoded'] = encoded_route
+            
+            # 3. Predict
+            X_current = X_template.fillna(X_template.median())
+            X_safe = X_current.drop(columns=[c for c in leakage if c in X_current.columns], errors='ignore')
+            X_safe = X_safe.apply(pd.to_numeric, errors='coerce').fillna(0)
+            if X_safe.shape[1] == 0:
+                X_safe = X_template.apply(pd.to_numeric, errors='coerce').fillna(0)
+            
+            dtest = xgb.DMatrix(X_safe, feature_names=list(X_safe.columns))
+            preds = model.predict(dtest)
+            
+            current_proba = 0.0
+            if isinstance(preds, (list, np.ndarray)) and len(preds) > 0:
+                current_proba = preds[0]
+            elif np.isscalar(preds):
+                current_proba = preds
+                
+            if current_proba > max_risk_proba:
+                max_risk_proba = current_proba
+
+        risk_proba = max_risk_proba
+        
+        # Clinical Heuristics
         severity_flags = [
-            renal_abnormal_flag,
-            hepatic_abnormal_flag,
-            anemia_flag,
-            thrombocytopenia_flag,
-            infection_flag,
-            feat_vent,
-            feat_vaso,
-            feat_dialysis
+            renal_abnormal_flag, hepatic_abnormal_flag, anemia_flag,
+            thrombocytopenia_flag, infection_flag, feat_vent, feat_vaso, feat_dialysis
         ]
         severity_count = sum(1 for f in severity_flags if f)
         icu_context = 1 if str(patient_data.get('admission_location', '')).upper() == 'ICU' or patient_data.get('num_icu_stays', 0) > 0 else 0
         drug_severe = 1 if drug_risk_features.get('max_severe_rate', 0) > 0.15 or drug_risk_features.get('num_high_risk_drugs', 0) >= 2 else 0
+        
         if icu_context and severity_count >= 4 and drug_severe:
             risk_proba = max(risk_proba, 0.75)
         elif severity_count >= 3 and drug_severe:
             risk_proba = max(risk_proba, 0.55)
         elif severity_count >= 2:
             risk_proba = max(risk_proba, 0.35)
+            
         risk_category = get_risk_category(risk_proba)
         return {
             'patient_data': patient_data,
@@ -2521,7 +2558,8 @@ def predict_patient_risk_pure(patient_data):
             'risk_category': risk_category,
             'timestamp': datetime.now().isoformat()
         }
-    except Exception:
+    except Exception as e:
+        print(f"Prediction error in pure function: {e}")
         return None
 def render_patient_form():
     """Render patient entry form - Refactored into 8 Clinical Sections (Expanders)"""

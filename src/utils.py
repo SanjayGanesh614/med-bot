@@ -355,6 +355,42 @@ def create_prediction_summary(
     }
 
 
+
+def normalize_drug_name(name: str) -> str:
+    """Normalize drug name for matching"""
+    if not isinstance(name, str):
+        return ""
+    return name.strip().lower().replace("-", " ").replace("(", "").replace(")", "")
+
+def find_best_drug_match(drug_name: str, encoder_keys: List[str]) -> str:
+    """
+    Find best matching key in encoder keys for a given drug name.
+    Prioritizes exact match, then containment, preferring shorter (more generic) keys.
+    """
+    if not drug_name or not encoder_keys:
+        return None
+        
+    norm_input = normalize_drug_name(drug_name)
+    
+    # 1. Exact Match (Fast)
+    if norm_input in encoder_keys:
+        return norm_input
+        
+    # 2. Fuzzy / Containment Search
+    candidates = []
+    for key in encoder_keys:
+        if norm_input in key or key in norm_input:
+            candidates.append(key)
+            
+    if not candidates:
+        return None
+        
+    # 3. Sort by length (shortest is usually the generic root)
+    candidates.sort(key=len)
+    
+    return candidates[0]
+
+
 if __name__ == "__main__":
     # Test utility functions
     print("Testing utility functions...")
@@ -369,6 +405,10 @@ if __name__ == "__main__":
     for age in [25, 55, 75]:
         group = create_age_group(age)
         print(f"Age: {age} -> Group: {group}")
+        
+    # Test Drug Match
+    test_keys = ["aspirin", "*nf* warfarin", "warfarin sodium", "tylenol"]
+    print(f"Match 'Warfarin': {find_best_drug_match('Warfarin', test_keys)}")
     
     print("\nUtility functions working correctly!")
 
