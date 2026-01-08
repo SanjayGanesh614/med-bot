@@ -111,10 +111,8 @@ st.markdown("""
         background-color: #FFFFFF !important;
     }
     
-    /* Sidebar styling - hidden for landing page */
-    [data-testid="stSidebar"] {
-        display: none !important;
-    }
+    /* Sidebar styling - hidden for landing page only */
+    /* Note: Sidebar visibility is controlled by JavaScript for dashboard pages */
     
     [data-testid="stSidebar"] .element-container {
         color: #1F2937;
@@ -1184,11 +1182,19 @@ def page_prediction_results():
     try:
         # Load feature template
         template_path = get_data_path("feature_template.csv")
-        X_template = pd.read_csv(template_path).iloc[0:1].copy()
+        template_df = pd.read_csv(template_path)
+        column_names = template_df.columns.tolist()
+        
+        # If the template has data rows, use the first one
+        if len(template_df) > 0 and not template_df.iloc[0:1].isna().all().all():
+            X_template = template_df.iloc[0:1].copy()
+        else:
+            # Create a new DataFrame with one row of zeros based on column names
+            X_template = pd.DataFrame({col: [0] for col in column_names})
         
         # Clear existing values to ensure fresh data
         for col in X_template.columns:
-            X_template[col] = 0
+            X_template[col] = pd.to_numeric(X_template[col], errors='coerce').fillna(0)
         
         gender_val = 1 if str(patient_data.get('gender', 'M')).upper().startswith('M') else 0
         selected_drugs = patient_data.get('selected_drugs', [])
@@ -1669,9 +1675,18 @@ def page_explainability():
                 patient_data = st.session_state['patient_data']
                 # Prepare features (same as in prediction)
                 template_path = get_data_path("feature_template.csv")
-                X_template = pd.read_csv(template_path).iloc[0:1].copy()
+                template_df = pd.read_csv(template_path)
+                column_names = template_df.columns.tolist()
+                
+                # If the template has data rows, use the first one
+                if len(template_df) > 0 and not template_df.iloc[0:1].isna().all().all():
+                    X_template = template_df.iloc[0:1].copy()
+                else:
+                    # Create a new DataFrame with one row of zeros based on column names
+                    X_template = pd.DataFrame({col: [0] for col in column_names})
+                
                 for col in X_template.columns:
-                    X_template[col] = 0
+                    X_template[col] = pd.to_numeric(X_template[col], errors='coerce').fillna(0)
                 
                 feature_mapping = {
                     'gender': 1 if patient_data.get('gender') == 'M' else 0,
@@ -1906,6 +1921,76 @@ def page_workflow():
 
 def render_dashboard_header():
     """Render dashboard navbar with logo and title"""
+    # Add sidebar toggle button and ensure it's always accessible
+    st.markdown("""
+        <style>
+            /* Make Streamlit's built-in sidebar toggle button always visible */
+            button[data-testid="baseButton-header"][aria-label*="sidebar"],
+            button[data-testid="baseButton-header"][aria-label*="menu"],
+            [data-testid="stHeader"] button[aria-label*="sidebar"],
+            [data-testid="stHeader"] button[aria-label*="menu"] {
+                display: block !important;
+                visibility: visible !important;
+                opacity: 1 !important;
+                z-index: 999 !important;
+            }
+            
+            /* Custom toggle button styling */
+            .sidebar-toggle-btn {
+                position: fixed;
+                top: 1rem;
+                left: 1rem;
+                z-index: 1000;
+                background-color: #2563EB;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 0.5rem 1rem;
+                cursor: pointer;
+                font-size: 1.2rem;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            }
+            
+            .sidebar-toggle-btn:hover {
+                background-color: #1E40AF;
+            }
+        </style>
+        <button class="sidebar-toggle-btn" onclick="toggleSidebar()" title="Toggle Sidebar">☰ Menu</button>
+        <script>
+            function toggleSidebar() {
+                // Try to click Streamlit's built-in sidebar toggle button
+                const toggleBtn = document.querySelector('button[data-testid="baseButton-header"][aria-label*="sidebar"]') ||
+                                  document.querySelector('button[data-testid="baseButton-header"][aria-label*="menu"]') ||
+                                  document.querySelector('[data-testid="stHeader"] button[aria-label*="sidebar"]') ||
+                                  document.querySelector('[data-testid="stHeader"] button[aria-label*="menu"]');
+                
+                if (toggleBtn) {
+                    toggleBtn.click();
+                } else {
+                    // Fallback: manually toggle sidebar visibility
+                    const sidebar = document.querySelector('[data-testid="stSidebar"]');
+                    if (sidebar) {
+                        const isVisible = sidebar.style.display !== 'none';
+                        sidebar.style.display = isVisible ? 'none' : 'block';
+                    }
+                }
+            }
+            
+            // Ensure sidebar toggle button is always visible
+            window.addEventListener('load', function() {
+                const toggleBtn = document.querySelector('button[data-testid="baseButton-header"][aria-label*="sidebar"]') ||
+                                  document.querySelector('button[data-testid="baseButton-header"][aria-label*="menu"]');
+                if (toggleBtn) {
+                    toggleBtn.style.display = 'block';
+                    toggleBtn.style.visibility = 'visible';
+                    toggleBtn.style.opacity = '1';
+                }
+            });
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+    
     st.markdown(
         """
         <div class="app-header-row">
@@ -2763,6 +2848,23 @@ def render_patient_form():
                 d_route = c3.selectbox("Route", ["PO (Oral)", "IV", "IM", "SC", "Topical"])
                 d_freq = c4.selectbox("Frequency", ["OD", "BD", "TDS", "QID", "HS", "STAT"])
                 
+                # Duration and Start Date
+                c5, c6 = st.columns(2)
+                d_duration = c5.number_input("Duration (days)", min_value=0, max_value=365, value=0, help="Expected treatment duration")
+                d_start_date = c6.date_input("Start Date", value=None, help="Medication start date")
+                
+                # Special Flags
+                st.markdown("**Special Flags:**")
+                flag_cols = st.columns(4)
+                with flag_cols[0]:
+                    d_narrow_ti = st.checkbox("Narrow Therapeutic Index", help="Drugs with narrow therapeutic window")
+                with flag_cols[1]:
+                    d_nephrotoxic = st.checkbox("Nephrotoxic", help="May cause kidney damage")
+                with flag_cols[2]:
+                    d_hepatotoxic = st.checkbox("Hepatotoxic", help="May cause liver damage")
+                with flag_cols[3]:
+                    d_qt_prolonging = st.checkbox("QT-prolonging", help="May prolong QT interval")
+                
                 high_risk = st.checkbox("⚠️ High Risk / Narrow Therapeutic Index")
                 
                 if st.form_submit_button("➕ Add Drug"):
@@ -2772,6 +2874,12 @@ def render_patient_form():
                             "dose": d_dose,
                             "route": d_route,
                             "freq": d_freq,
+                            "duration_days": d_duration,
+                            "start_date": d_start_date.isoformat() if d_start_date else None,
+                            "narrow_therapeutic_index": d_narrow_ti,
+                            "nephrotoxic": d_nephrotoxic,
+                            "hepatotoxic": d_hepatotoxic,
+                            "qt_prolonging": d_qt_prolonging,
                             "high_risk": high_risk
                         })
                         st.rerun()
@@ -2783,8 +2891,35 @@ def render_patient_form():
                 for idx, med in enumerate(st.session_state['medications_list']):
                     col_txt, col_act = st.columns([5,1])
                     with col_txt:
-                        risk_mark = "⚠️" if med['high_risk'] else "💊"
-                        st.markdown(f"{risk_mark} **{med['name']}** {med['dose']} via {med['route']} ({med['freq']})")
+                        risk_mark = "⚠️" if med.get('high_risk', False) else "💊"
+                        med_info = f"{risk_mark} **{med['name']}** {med.get('dose', '')} via {med.get('route', '')} ({med.get('freq', '')})"
+                        
+                        # Add duration and start date if available
+                        if med.get('duration_days', 0) > 0:
+                            med_info += f" | Duration: {med['duration_days']} days"
+                        if med.get('start_date'):
+                            from datetime import datetime
+                            try:
+                                start_date = datetime.fromisoformat(med['start_date']).strftime('%Y-%m-%d')
+                                med_info += f" | Started: {start_date}"
+                            except:
+                                pass
+                        
+                        # Add special flags
+                        flags = []
+                        if med.get('narrow_therapeutic_index', False):
+                            flags.append("NTI")
+                        if med.get('nephrotoxic', False):
+                            flags.append("Nephro")
+                        if med.get('hepatotoxic', False):
+                            flags.append("Hepato")
+                        if med.get('qt_prolonging', False):
+                            flags.append("QT")
+                        
+                        if flags:
+                            med_info += f" | Flags: {', '.join(flags)}"
+                        
+                        st.markdown(med_info)
                     with col_act:
                         if st.button("❌", key=f"del_med_{idx}"):
                             st.session_state['medications_list'].pop(idx)
@@ -3307,14 +3442,30 @@ def render_explainability_tab():
             # Robust path finding
             template_path = get_data_path("feature_template.csv")
             try:
-                X_template = pd.read_csv(template_path).iloc[0:1].copy()
+                template_df = pd.read_csv(template_path)
+                # Get column names from the template
+                column_names = template_df.columns.tolist()
+                
+                # If the template has data rows, use the first one
+                if len(template_df) > 0 and not template_df.iloc[0:1].isna().all().all():
+                    X_template = template_df.iloc[0:1].copy()
+                else:
+                    # Create a new DataFrame with one row of zeros based on column names
+                    X_template = pd.DataFrame({col: [0] for col in column_names})
+                
             except FileNotFoundError:
                 raise FileNotFoundError(f"Feature template not found at {template_path}")
 
-            if X_template.empty:
-                raise ValueError("Feature template is empty")
+            if X_template.empty or len(X_template) == 0:
+                # Fallback: create template from column names if available
+                if 'column_names' in locals() and column_names:
+                    X_template = pd.DataFrame({col: [0] for col in column_names})
+                else:
+                    raise ValueError("Feature template is empty and cannot be reconstructed")
+            
+            # Ensure all columns are numeric and set to 0 initially
             for col in X_template.columns:
-                X_template[col] = 0
+                X_template[col] = pd.to_numeric(X_template[col], errors='coerce').fillna(0)
             
             feature_mapping = {
                 'gender': 1 if patient_data.get('gender') == 'M' else 0,
@@ -3641,12 +3792,10 @@ def main():
     # 3. Routing Logic
     if current_page == "dashboard":
         # === DASHBOARD MODE ===
-        # Ensure sidebar is visible
-        # Ensure sidebar is visible and light-themed
+        # Ensure sidebar styling is correct and toggle button is always accessible
         st.markdown("""
             <style>
                 [data-testid="stSidebar"] {
-                    display: block !important;
                     background-color: #F8FAFC !important;
                 }
                 [data-testid="stSidebar"] .block-container {
@@ -3654,6 +3803,16 @@ def main():
                 }
                 [data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] label, [data-testid="stSidebar"] div {
                     color: #1F2937 !important;
+                }
+                /* Ensure Streamlit's built-in sidebar toggle button is always visible */
+                [data-testid="stHeader"] button[aria-label*="sidebar"],
+                [data-testid="stHeader"] button[aria-label*="menu"],
+                button[data-testid="baseButton-header"][aria-label*="sidebar"],
+                button[data-testid="baseButton-header"][aria-label*="menu"] {
+                    display: block !important;
+                    visibility: visible !important;
+                    opacity: 1 !important;
+                    z-index: 999 !important;
                 }
             </style>
         """, unsafe_allow_html=True)
